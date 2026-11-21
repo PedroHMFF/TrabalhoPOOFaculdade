@@ -1,54 +1,112 @@
 #ifndef RESERVA_H
 #define RESERVA_H
+
 #include <string>
 #include "pessoa.h"
 #include "quarto.h"
 #include "data.h"
 #include "descontostrategy.h"
+
 using namespace std;
+
+//os 3 estados possiveis de uma reserva
+enum StatusReserva { PENDENTE, CONFIRMADA, CANCELADA };
+
 class Reserva{
     private:
-        Pessoa hospede;
+        int id;                     //numero da reserva (quem preenche e o gerenciador)
+        Cliente hospede;            
+        Atendente atendente;        //quem fez a reserva
+        string localidade;          //Jericoacoara, Canoa Quebrada ou Cumbuco
         Quarto quarto;
-        Data checkIn; 
+        Data checkIn;
         int diarias;
-        DescontoStrategy * desconto;    
-    public:
-        //metodos
-        //calcular o valor final da estadia com a regra de desconto escolhida
-        double calcularValorTotal()const {
-            // Multiplica o preco da diaria do quarto pela quantidade de dias
-           double valorBruto = quarto.getDiaria() * diarias;
-            //Polimorfismo (Strategy): o ponteiro 'desconto' chama sozinho a conta
-            // da classe certa (VIP, Temporada, SemDesconto, etc.) sem precisarmos de 'if'
-            return desconto->calcularValorComDesconto(valorBruto);
-        }
-        // Calcula o sinal de 1/3 exigido para confirmar a reserva
-        double calcularEntradaTotal()const{
-            //Pega o total ja com desconto e usa o metodo da classe base para dividir por 3
-            return desconto->calcularEntrada(calcularValorTotal());
-        }
-        Data getCheckIn() const{
-            //pega o dia, faz a soma se tiver no data.h, e devolve uma data 
-            return checkIn.adicionarDias(diarias);
+        DescontoStrategy* desconto;
+        StatusReserva status;       
+
+        //um "SemDesconto" que existe o programa todo,
+        //usado quando nao passam nenhum desconto (evita ponteiro nulo)
+        static DescontoStrategy* semDescontoPadrao(){
+            static SemDesconto padrao;
+            return &padrao;
         }
 
+    public:
         //construtor
-        Reserva(Pessoa h,Quarto q,Data check,int di,DescontoStrategy* desc)
-        :hospede(h),quarto(q),checkIn(check),diarias(di),desconto(desc){}
-        //getters e setters, porque estao private
-        int getDiarias()const{//colocamos o const no get, pra garantir que o metodo so vai entregar a leitura sem alterar nada
-            return diarias;
+        //OBS: o objeto de desconto NAO e apagado pela Reserva. Crie as estrategias uma vez so
+        //(ex: no gerenciador) e nao de delete nelas enquanto o programa roda.
+        Reserva(Cliente h, Atendente a, string loc, Quarto q, Data check, int di, DescontoStrategy* desc)
+            : id(0), hospede(h), atendente(a), localidade(loc), quarto(q), checkIn(check),
+              diarias(di), desconto(desc), status(PENDENTE){
+            if(desconto == nullptr) desconto = semDescontoPadrao();//MUDANCA: protecao contra nullptr
         }
-        Quarto getQuarto()const{
-            return quarto;
+
+        
+        //valor sem desconto: diaria x numero de diarias
+        double calcularValorBruto() const{
+            return quarto.getDiaria() * diarias;
         }
-        Pessoa getHospede()const{
-            return hospede;
+
+        //valor final com a regra de desconto escolhida
+        double calcularValorTotal() const{
+            //Polimorfismo (Strategy): o ponteiro 'desconto' chama sozinho a conta
+            //da classe certa (VIP, Temporada, SemDesconto, etc.) sem precisarmos de 'if'
+            return desconto->calcularValorComDesconto(calcularValorBruto());
         }
-        Data getCheckin()const{
-            return checkIn;
+
+        
+        double calcularEntrada() const{
+            return calcularValorTotal() / 3.0;
         }
+
+        //datas 
+        Data getCheckIn() const { return checkIn; }
+
+        //era o antigo getCheckIn() que somava os dias. Agora tem o nome certo:
+        //o dia da saida (o hospede sai nesse dia, entao ele fica livre pra outra reserva)
+        Data getCheckOut() const { return checkIn.adicionarDias(diarias); }
+
+        //verifica se esta reserva ocupa o mesmo quarto, na mesma unidade, em algum dia do periodo
+        //regra: dois periodos se cruzam se inicioA < fimB  E  inicioB < fimA
+        bool conflitaCom(string loc, string tipoQuarto, Data inicio, int dias) const{
+            if(status == CANCELADA) return false;//reserva cancelada nao ocupa o quarto
+            if(localidade != loc || quarto.getTipo() != tipoQuarto) return false;
+            Data fim = inicio.adicionarDias(dias);
+            return checkIn < fim && inicio < getCheckOut();
+        }
+        bool conflitaCom(const Reserva& outra) const{
+            return outra.status != CANCELADA &&
+                   conflitaCom(outra.localidade, outra.quarto.getTipo(), outra.checkIn, outra.diarias);
+        }
+
+        //confirma o pagamento. Retorna false se a reserva nao estava pendente
+        bool confirmarPagamento(){
+            if(status != PENDENTE) return false;
+            status = CONFIRMADA;
+            return true;
+        }
+        //cancela a reserva (usado quando outra reserva paga ocupa o mesmo quarto)
+        void cancelar(){ status = CANCELADA; }
+
+        StatusReserva getStatus() const { return status; }
+        bool estaConfirmada() const { return status == CONFIRMADA; }
+
+        //status em texto, pra mostrar no resumo, na tabela e no arquivo
+        string getStatusTexto() const{
+            if(status == CONFIRMADA) return "Confirmada";
+            if(status == CANCELADA) return "Cancelada";
+            return "Pendente de confirmacao";
+        }
+
+        // getters e setters
+        int getId() const { return id; }
+        void setId(int novoId){ id = novoId; }
+        int getDiarias() const { return diarias; }
+        Quarto getQuarto() const { return quarto; }
+        Cliente getHospede() const { return hospede; }
+        Atendente getAtendente() const { return atendente; }
+        string getLocalidade() const { return localidade; }
+        string getNomeDesconto() const { return desconto->getNome(); }
 };
 
 #endif
